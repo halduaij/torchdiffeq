@@ -141,3 +141,16 @@ def _radau5_implicit_dirk(
     f1  = func(t0 + dt, y1.view_as(y0))
     err = dt * torch.sum(E.unsqueeze(-1) * K, dim=0)
     return y1.view_as(y0), f1, err.view_as(y0), K
+
+# ------------------------------------------------------------------
+#  Export the classic convenience wrapper so existing user code works
+# ------------------------------------------------------------------
+from .rk_common import RKAdaptiveStepsizeODESolver   # late import – avoids cycle
+
+class RadauSolver(RKAdaptiveStepsizeODESolver):
+    """Drop‑in method string: method='RadauSolver'."""
+    order   = 5
+    tableau = _RADAU_IIA_TABLEAU
+    mid     = RADAU_C_MID
+
+__all__.extend(["RadauSolver"])
