@@ -178,6 +178,8 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
         # `dtype` (defaulting to float64).
         dtype = torch.promote_types(dtype, y0.abs().dtype)
         device = y0.device
+        from . import radau as _radau
+
         self._A = _RADAU_A.to(device=device, dtype=y0.dtype)
         self._B = _RADAU_B.to(device=device, dtype=y0.dtype)
         self._C = _RADAU_C.to(device=device, dtype=y0.dtype)
