@@ -406,7 +406,8 @@ class FixedGridFIRKODESolver(FixedGridODESolver):
                 self.grid_constructor = self._grid_constructor_from_step_size(step_size)
             else:
                 raise ValueError("step_size and grid_constructor are mutually exclusive arguments.")
-            
+        self._J_cached = None        # ← NEW: store Jacobian between steps
+           
         self.tableau = _ButcherTableau(alpha=self.tableau.alpha.to(device=self.device, dtype=y0.dtype),
                                        beta=[b.to(device=self.device, dtype=y0.dtype) for b in self.tableau.beta],
                                        c_sol=self.tableau.c_sol.to(device=self.device, dtype=y0.dtype),
@@ -438,7 +439,7 @@ class FixedGridFIRKODESolver(FixedGridODESolver):
         # Broyden's Method to solve the system of nonlinear equations
         y = torch.matmul(k, beta * dt).add(y0.unsqueeze(-1)).movedim(-1, 0)
         f = self._residual(func, k, y, t0, dt, t1)
-        J = torch.ones_like(f).diag()
+        J = self._J_cached.clone() if self._J_cached is not None else torch.eye(f.numel(), device=f.device, dtype=f.dtype)
         converged = False
         for _ in range(self.max_iters):
             if torch.linalg.norm(f, 2) < tol:
@@ -457,7 +458,13 @@ class FixedGridFIRKODESolver(FixedGridODESolver):
             z = newf - f
             f = newf
             J = J + (torch.outer ((z - torch.linalg.vecdot(J,s)),s)) / (torch.dot(s,s))
+        if converged:
+            self._J_cached = J.clone()     # ← NEW: keep Jacobian for next step
+        else:
+            warnings.warn('Functional iteration did not converge. Solution may be incorrect.')
 
+        dy = torch.matmul(k, dt * self.tableau.c_sol)
+        return dy, f0
         if not converged:
             warnings.warn('Functional iteration did not converge. Solution may be incorrect.')
 
