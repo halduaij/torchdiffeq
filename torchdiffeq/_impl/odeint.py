@@ -2,20 +2,26 @@ import torch
 from torch.autograd.functional import vjp
 from .dopri5 import Dopri5Solver
 from .bosh3 import Bosh3Solver
-from .radau import RadauSolver
 from .adaptive_heun import AdaptiveHeunSolver
 from .fehlberg2 import Fehlberg2
 from .fixed_grid import Euler, Midpoint, Heun2, Heun3, RK4
+from .fixed_grid_implicit import ImplicitEuler, ImplicitMidpoint, Trapezoid
+from .fixed_grid_implicit import GaussLegendre4, GaussLegendre6
+from .fixed_grid_implicit import RadauIIA3, RadauIIA5
+from .adaptive_radau import AdaptiveRadauIIA3, AdaptiveRadauIIA5
+
+from .fixed_grid_implicit import SDIRK2, TRBDF2
 from .fixed_adams import AdamsBashforth, AdamsBashforthMoulton
 from .dopri8 import Dopri8Solver
-from .scipy_wrapper import ScipyWrapperODESolver, RK45Solver, DOP853Solver, Radau, BDF
+from .tsit5 import Tsit5Solver
+from .scipy_wrapper import ScipyWrapperODESolver
 from .misc import _check_inputs, _flat_to_shape
 from .interp import _interp_evaluate
 
 SOLVERS = {
     'dopri8': Dopri8Solver,
     'dopri5': Dopri5Solver,
-    'radau': RadauSolver,
+    'tsit5': Tsit5Solver,
     'bosh3': Bosh3Solver,
     'fehlberg2': Fehlberg2,
     'adaptive_heun': AdaptiveHeunSolver,
@@ -24,15 +30,23 @@ SOLVERS = {
     'heun2': Heun2,
     'heun3': Heun3,
     'rk4': RK4,
+    'radauIIA3_adaptive': AdaptiveRadauIIA3,
+    'radauIIA5_adaptive': AdaptiveRadauIIA5,
     'explicit_adams': AdamsBashforth,
     'implicit_adams': AdamsBashforthMoulton,
+    'implicit_euler': ImplicitEuler,
+    'implicit_midpoint': ImplicitMidpoint,
+    'trapezoid': Trapezoid,
+    'radauIIA3': RadauIIA3,
+    'gl4': GaussLegendre4,
+    'radauIIA5': RadauIIA5,
+    'gl6': GaussLegendre6,
+    'sdirk2': SDIRK2,
+    'trbdf2': TRBDF2,
     # Backward compatibility: use the same name as before
     'fixed_adams': AdamsBashforthMoulton,
     # ~Backwards compatibility
-    'scipy_rk45': RK45Solver,
-    'scipy_dop853': DOP853Solver,
-    'scipy_radau': Radau,
-    'scipy_bdf': BDF,
+    'scipy_solver': ScipyWrapperODESolver,
 }
 
 
