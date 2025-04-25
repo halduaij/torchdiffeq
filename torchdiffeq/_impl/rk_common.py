@@ -439,7 +439,10 @@ class FixedGridFIRKODESolver(FixedGridODESolver):
         # Broyden's Method to solve the system of nonlinear equations
         y = torch.matmul(k, beta * dt).add(y0.unsqueeze(-1)).movedim(-1, 0)
         f = self._residual(func, k, y, t0, dt, t1)
-        J = self._J_cached.clone() if self._J_cached is not None else torch.eye(f.numel(), device=f.device, dtype=f.dtype)
+        if self._J_cached is not None:
+            J = self._J_cached.detach().clone()  # NEW – detached copy
+        else:
+            J = torch.eye(f.numel(), dtype=f.dtype, device=f.device)
         converged = False
         for _ in range(self.max_iters):
             if torch.linalg.norm(f, 2) < tol:
@@ -458,8 +461,9 @@ class FixedGridFIRKODESolver(FixedGridODESolver):
             z = newf - f
             f = newf
             J = J + (torch.outer ((z - torch.linalg.vecdot(J,s)),s)) / (torch.dot(s,s))
+
         if converged:
-            self._J_cached = J.clone()     # ← NEW: keep Jacobian for next step
+            self._J_cached = J.detach()          # NEW – store detached Jacobian
         else:
             warnings.warn('Functional iteration did not converge. Solution may be incorrect.')
 

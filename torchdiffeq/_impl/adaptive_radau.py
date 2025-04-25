@@ -51,13 +51,6 @@ class _Base(RKAdaptiveStepsizeODESolver):
         ratio = _compute_error_ratio(err_vec, self.rtol, self.atol, y0, y1, self.norm)
 
         # fast-accept if predictor already very good
-        if ratio <= 0.05:
-            self.func.callback_accept_step(t0, y0, dt)
-            dt_next = dt * torch.clamp(
-                0.9 * ratio.pow(-1 / (self.order + 1)), self.dfactor, self.ifactor
-            ).clamp(self.min_step, self.max_step)
-            coeff = self._interp_fit(y0, y_pred, k_pred, dt)
-            return _RKState(y_pred, f_pred, t0, t1, dt_next, coeff)
 
         # normal accept/reject
         if (ratio <= 1) or (dt <= self.min_step):        # accept
