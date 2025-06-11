@@ -1311,7 +1311,7 @@ class MultiConverterSimulation(torch.nn.Module):
             t=t_span,
             rtol=1e-5,
             atol=1e-5,
-            method='dopri5',
+            method='enhanced_neural',
             options=options
         )
 

@@ -38,7 +38,7 @@ class EnhancedNeuralODESolver(AdaptiveStepsizeEventODESolver):
     e2 = -1.0
     e3 = 0.0
     
-    def __init__(self, func, y0, rtol, atol,
+    def __init__(self, func, y0, rtol, atol, dtype=None,
                  # --- Preconditioning options ---
                  use_preconditioning: bool = True,
                  precond_type: str = 'block_diagonal',
@@ -77,7 +77,20 @@ class EnhancedNeuralODESolver(AdaptiveStepsizeEventODESolver):
                  
                  **kwargs):
         """Initialize solver with enhanced configuration."""
-        super().__init__(func=func, y0=y0, rtol=rtol, atol=atol, **kwargs)
+        if dtype is None:
+            dtype = y0.dtype
+            
+        # Initialize parent class first
+        super().__init__(func=func, y0=y0, rtol=rtol, atol=atol, dtype=dtype, **kwargs)
+        
+        # Store required attributes
+        self.func = func
+        self.y0 = y0
+        self.rtol = rtol
+        self.atol = atol
+        self.dtype = dtype
+        self.norm = torch.nn.functional.normalize
+        self.max_num_steps = 1000000  # Reasonable default
         
         # Validate and set block sizes
         if precond_type == 'block_diagonal':
@@ -136,7 +149,7 @@ class EnhancedNeuralODESolver(AdaptiveStepsizeEventODESolver):
         
         # Mixed precision setup
         if self.use_mixed_precision:
-            self.compute_dtype = torch.float32
+            self.compute_dtype = torch.float64
             self.storage_dtype = y0.dtype
         else:
             self.compute_dtype = y0.dtype
@@ -520,8 +533,24 @@ class EnhancedNeuralODESolver(AdaptiveStepsizeEventODESolver):
     
     def _before_integrate(self, t):
         """Initialize solver state."""
+        # Initialize state in storage precision
         self.y = self.y0
+        
+        # Handle tensor dimensions for normalization
+        if self.y0.dim() == 1:
+            # For 1D tensors, use a simple norm without dimension specification
+            self.norm = lambda x: torch.norm(x, p=2)
+        else:
+            # For higher dimensional tensors, use the original normalization
+            self.norm = torch.nn.functional.normalize
+        
+        # Convert to compute precision if using mixed precision
+        if self.use_mixed_precision:
+            self.y = self.y.to(self.compute_dtype)
+        
         self.t = t[0]
+        
+        # Select initial step size using torchdiffeq's function
         self.dt = _select_initial_step(
             self.func, self.t, self.y, self.order - 1,
             self.rtol, self.atol, self.norm
