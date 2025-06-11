@@ -401,6 +401,9 @@ class PowerSystemNetwork:
 
     def calculate_total_currents(self, v_nodes: torch.Tensor, i_line: torch.Tensor) -> torch.Tensor:
         """Calculate total current injections."""
+        # Ensure inputs are in the correct dtype
+        i_line = i_line.to(dtype=self.dtype, device=self.device)
+        v_nodes = v_nodes.to(dtype=self.dtype, device=self.device)
         return self.B_active @ i_line
 
     def compute_algebraic_line_currents(self, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -435,15 +438,27 @@ class PowerSystemNetwork:
 
     def line_dynamics(self, v: torch.Tensor, i_line: torch.Tensor) -> torch.Tensor:
         """Line dynamics equation in per-unit."""
-        i_sum = torch.sum((self.B_active @ i_line).view(self.Nc, 2), dim=0)
+        # Ensure i_line is in the correct shape and dtype
+        if i_line.shape[0] != self.Nt * self.n:
+            i_line = i_line.view(self.Nt, self.n).flatten()
+        i_line = i_line.to(dtype=self.dtype, device=self.device)
+        v = v.to(dtype=self.dtype, device=self.device)
+        
+        # Compute current sum
+        i_sum = torch.sum((self.B_active @ i_line).view(self.Nc, self.n), dim=0)
+        
         # Ensure rL is a scalar
         rL_scalar = self.rL if isinstance(self.rL, (int, float)) else self.rL.item()
         v_common = rL_scalar * i_sum
+        
+        # Compute voltage difference
         v_diff = (self.B_active.T @ v) - torch.cat([v_common for _ in range(self.Nt)], dim=0)
+        
+        # Compute right-hand side
         rhs = -self.Zt @ i_line + v_diff
-        ωb = self.pu.ωb          # 2π·60  = 377
-
-        di_line =  torch.linalg.solve(self.Lt, rhs)
+        
+        # Solve for di_line
+        di_line = torch.linalg.solve(self.Lt, rhs)
         return di_line
 
 
@@ -581,17 +596,27 @@ class ConverterControl:
         return 1.0 - (norm_vhat**2) / (v_star**2 + 1e-12)
 
     def filter_dynamics_active(self, idx, v_local, i_f_local, vm_local, v_full, i_line):
-        """Active filter dynamics in per-unit."""
-        idx_slice = slice(2*idx, 2*(idx+1))
-        ωb = self.network.pu.ωb          # 2π·60  = 377
-
-        Yf_local = self.Yf[idx_slice, idx_slice]
-        Zf_local = self.Zf[idx_slice, idx_slice]
-        i_total = self.network.calculate_total_currents(v_full, i_line)
-        i_o_local = i_total[idx_slice]
-
-        dv = (1/ self.cf) * (-Yf_local @ v_local - i_o_local + i_f_local)
-        dif = (1 / self.lf) * (-Zf_local @ i_f_local - v_local + vm_local)
+        """Filter dynamics for active converter."""
+        # Ensure inputs are in the correct dtype
+        v_local = v_local.to(dtype=self.dtype, device=self.device)
+        i_f_local = i_f_local.to(dtype=self.dtype, device=self.device)
+        vm_local = vm_local.to(dtype=self.dtype, device=self.device)
+        v_full = v_full.to(dtype=self.dtype, device=self.device)
+        i_line = i_line.to(dtype=self.dtype, device=self.device)
+        
+        # Get local filter admittance
+        Yf_local = torch.tensor([
+            [1/self.rf, -1/self.lf],
+            [1/self.lf, 1/self.rf]
+        ], dtype=self.dtype, device=self.device)
+        
+        # Calculate output current
+        i_o_local = self.network.calculate_total_currents(v_full, i_line)[2*idx:2*(idx+1)]
+        
+        # Filter dynamics
+        dv = (1/self.cf) * (-Yf_local @ v_local - i_o_local + i_f_local)
+        dif = (1/self.lf) * (vm_local - v_local - self.rf * i_f_local)
+        
         return dv, dif
 
     def filter_dynamics_inactive(self, idx, v_local, i_f_local, v_full, i_line):
@@ -610,74 +635,79 @@ class ConverterControl:
 
     def voltage_control(self, idx, v_node, vhat_node, i_line, zeta_v_node, v_full, setpoints):
         """Voltage control dynamics."""
-        if not (self.converter_states[idx]['voltage_control'] and
-                self.converter_states[idx]['active']):
-            return (torch.zeros(2, dtype=self.dtype, device=self.device),
-                   torch.zeros(2, dtype=self.dtype, device=self.device))
-
-        idx_slice = slice(2*idx, 2*(idx+1))
-        i_total = self.network.calculate_total_currents(v_full, i_line)
-        i_inj = i_total[idx_slice]
-
-        if self.converter_states[idx]['power_control']:
-            # Full dVOC
-            K = self.calculate_K(idx, setpoints)
-            phi_val = self.calculate_Phi(vhat_node, idx, setpoints)
-
-            # Use pre-computed R_kappa
-            R_kappa = self.network.R_kappa[idx_slice, idx_slice]
-
-            dvhat = self.eta * (K @ vhat_node - R_kappa @ i_inj +
-                               self.eta_a * phi_val * vhat_node)
-        else:
-            # Basic voltage regulation
-            v_star = setpoints.v_star[idx]
-            v_mag = torch.norm(v_node) + 1e-12
-            dvhat = -self.Kp_v * ((v_mag - v_star) * (v_node / v_mag))
-
-        dzeta_v =  (v_node - vhat_node)
+        # Ensure inputs are in the correct dtype
+        v_node = v_node.to(dtype=self.dtype, device=self.device)
+        vhat_node = vhat_node.to(dtype=self.dtype, device=self.device)
+        i_line = i_line.to(dtype=self.dtype, device=self.device)
+        zeta_v_node = zeta_v_node.to(dtype=self.dtype, device=self.device)
+        v_full = v_full.to(dtype=self.dtype, device=self.device)
+        
+        # Calculate K matrix
+        K = self.calculate_K(idx, setpoints)
+        
+        # Get R_kappa for this converter
+        R_kappa = self.network.R_kappa[2*idx:2*(idx+1), 2*idx:2*(idx+1)]
+        
+        # Calculate current injection
+        i_inj = self.network.calculate_total_currents(v_full, i_line)[2*idx:2*(idx+1)]
+        
+        # Voltage control dynamics
+        dvhat = self.eta * (K @ vhat_node - R_kappa @ i_inj +
+                           self.Kp_v * (v_node - vhat_node) +
+                           self.Ki_v * zeta_v_node)
+        
+        # Integral term
+        dzeta_v = v_node - vhat_node
+        
         return dvhat, dzeta_v
 
     def calculate_reference_current(self, idx, v_node, vhat_node, i_line, zeta_v_node, v_full):
-        """Calculate reference current."""
-        idx_slice = slice(2*idx, 2*(idx+1))
-
-        if not self.converter_states[idx]['active']:
-            return torch.zeros(2, dtype=self.dtype, device=self.device)
-
-        Yf_local = self.Yf[idx_slice, idx_slice]
-
-        if self.converter_states[idx]['voltage_control']:
-            i_total = self.network.calculate_total_currents(v_full, i_line)
-            i_inj = i_total[idx_slice]
-
-            if self.converter_states[idx]['power_control']:
-                i_ref = (Yf_local @ v_node + i_inj -
-                        self.Kp_v_mat[idx_slice, idx_slice] @ (v_node - vhat_node) -
-                        self.Ki_v_mat[idx_slice, idx_slice] @ zeta_v_node)
-            else:
-                i_ref = (Yf_local @ v_node -
-                        self.Kp_v_mat[idx_slice, idx_slice] @ (v_node - vhat_node) -
-                        self.Ki_v_mat[idx_slice, idx_slice] @ zeta_v_node)
-        else:
-            i_ref = Yf_local @ v_node
-
+        """Calculate reference current for current control."""
+        # Ensure inputs are in the correct dtype
+        v_node = v_node.to(dtype=self.dtype, device=self.device)
+        vhat_node = vhat_node.to(dtype=self.dtype, device=self.device)
+        i_line = i_line.to(dtype=self.dtype, device=self.device)
+        zeta_v_node = zeta_v_node.to(dtype=self.dtype, device=self.device)
+        v_full = v_full.to(dtype=self.dtype, device=self.device)
+        
+        # Get local filter admittance
+        Yf_local = torch.tensor([
+            [1/self.rf, -1/self.lf],
+            [1/self.lf, 1/self.rf]
+        ], dtype=self.dtype, device=self.device)
+        
+        # Calculate current injection
+        i_inj = self.network.calculate_total_currents(v_full, i_line)[2*idx:2*(idx+1)]
+        
+        # Calculate reference current
+        i_ref = (Yf_local @ v_node + i_inj -
+                 self.Kp_f * (v_node - vhat_node) -
+                 self.Ki_f * zeta_v_node)
+        
         return i_ref
 
     def current_control(self, idx, v_node, i_f_node, i_ref_node, zeta_f_node):
         """Current control dynamics."""
-        if not self.converter_states[idx]['active']:
-            return (torch.zeros(2, dtype=self.dtype, device=self.device),
-                   torch.zeros(2, dtype=self.dtype, device=self.device))
-
-        idx_slice = slice(2*idx, 2*(idx+1))
-        Zf_local = self.Zf[idx_slice, idx_slice]
-
+        # Ensure inputs are in the correct dtype
+        v_node = v_node.to(dtype=self.dtype, device=self.device)
+        i_f_node = i_f_node.to(dtype=self.dtype, device=self.device)
+        i_ref_node = i_ref_node.to(dtype=self.dtype, device=self.device)
+        zeta_f_node = zeta_f_node.to(dtype=self.dtype, device=self.device)
+        
+        # Get local filter impedance
+        Zf_local = torch.tensor([
+            [self.rf, -self.lf],
+            [self.lf, self.rf]
+        ], dtype=self.dtype, device=self.device)
+        
+        # Current control dynamics
         vm_local = (Zf_local @ i_f_node + v_node -
-                   self.Kp_f_mat[idx_slice, idx_slice] @ (i_f_node - i_ref_node) -
-                   self.Ki_f_mat[idx_slice, idx_slice] @ zeta_f_node)
-
-        dzeta_f =( i_f_node - i_ref_node)
+                    self.Kp_f * (i_f_node - i_ref_node) -
+                    self.Ki_f * zeta_f_node)
+        
+        # Integral term
+        dzeta_f = i_f_node - i_ref_node
+        
         return vm_local, dzeta_f
 
     def compute_converter_dynamics(self, idx, full_state, setpoints, i_line):
