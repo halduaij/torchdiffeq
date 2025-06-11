@@ -1293,8 +1293,6 @@ class MultiConverterSimulation(torch.nn.Module):
 
         # Solver options for enhanced neural solver
         options = {
-            'rtol': 1e-5,
-            'atol': 1e-5,
             'use_preconditioning': True,
             'precond_type': 'block_diagonal',
             'precond_block_sizes': [2 * self.network.Nc, 2 * self.network.Nt, 2 * self.network.Nc, 2 * self.network.Nc, 2 * self.network.Nc, 2 * self.network.Nc],
@@ -1311,7 +1309,9 @@ class MultiConverterSimulation(torch.nn.Module):
             func=self,
             y0=x0,
             t=t_span,
-            method='enhanced_neural',
+            rtol=1e-5,
+            atol=1e-5,
+            method='dopri5',
             options=options
         )
 

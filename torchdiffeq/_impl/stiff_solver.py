@@ -645,6 +645,34 @@ class EnhancedNeuralODESolver(AdaptiveStepsizeEventODESolver):
         event_time, y1 = find_event(interp_fn, sign0, t0, t1, event_fn, self.atol)
         return event_time, y1
 
+    def _advance(self, next_t):
+        """Advance the solution to next_t."""
+        n_steps = 0
+        while next_t > self.t:
+            assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
+            y_next, t_next, dt_next, accepted = self._adaptive_step(
+                self.func, self.t, self.dt, self.y
+            )
+            
+            if accepted:
+                self.y = y_next
+                self.t = t_next
+                self.dt = dt_next
+            else:
+                self.dt = dt_next
+                if self.t >= t_next:
+                    break
+            
+            n_steps += 1
+            
+            # Safety check
+            if self.consecutive_rejects > 15:
+                raise RuntimeError(
+                    f"Solver failed after {self.consecutive_rejects} consecutive rejections at t={self.t.item():.6e}"
+                )
+        
+        return self.y
+
 
 # Example usage demonstrating gradient flow preservation
 if __name__ == '__main__':
